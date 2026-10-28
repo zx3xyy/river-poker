@@ -9,6 +9,13 @@ let state = null, socket = null, connection = 'connecting', reconnectTimer = nul
 let currentCode = (new URL(location.href).searchParams.get('room') || '').toUpperCase();
 let tab = currentCode ? 'join' : 'create', formError = '', roomMeta = null, busy = false, actionBusy = false;
 let nickname = storage.get('river:name') || '', chatDraft = '', raiseValue = 0, lastTurn = null, clockOffset = 0;
+let motionSpeed = ['fast', 'normal', 'off'].includes(storage.get('river:motion')) ? storage.get('river:motion') : 'fast';
+function setMotionSpeed(value) {
+  motionSpeed = ['fast', 'normal', 'off'].includes(value) ? value : 'fast';
+  document.documentElement.style.setProperty('--motion-speed', motionSpeed === 'fast' ? '.6' : '1');
+  document.documentElement.classList.toggle('motion-off', motionSpeed === 'off');
+}
+setMotionSpeed(motionSpeed);
 
 function card(value, extra = '') {
   if (value === undefined) return `<div class="card empty ${extra}" aria-label="尚未发牌">♠</div>`;
@@ -35,21 +42,21 @@ function renderLanding() {
 
 const desktopPositions = [[50, 88], [19, 77], [8, 46], [23, 15], [50, 10], [77, 15], [92, 46], [81, 77]];
 const mobilePositions = [[50, 89], [16, 76], [14, 46], [20, 17], [50, 10], [80, 17], [86, 46], [84, 76]];
-function renderSeat(p, position, s) {
+function renderSeat(p, position, s, effects) {
   const [x, y] = position;
   if (!p) return `<div class="seat empty-seat" style="left:${x}%;top:${y}%"><div class="empty-circle">＋</div>等一位朋友</div>`;
   const isMe = p.id === s.selfId, isTurn = s.actorId === p.id, won = s.result?.pots.some(pot => !pot.refund && pot.winners.includes(p.id));
   const badge = p.seat === s.button && s.handNo ? 'D' : p.id === s.smallBlindId ? 'SB' : p.id === s.bigBlindId ? 'BB' : '';
   let status = p.leaving ? '已离桌' : p.sittingOut && !p.inHand ? '暂时休息' : !p.connected ? '已断线 · 保留座位' : p.lastAction || (p.inHand ? (p.stack === 0 ? 'ALL IN' : '等待行动') : '准备好了');
   if (won) status = s.result.hands[p.id]?.label || '拿下底池';
-  return `<div class="seat ${isMe ? 'you' : ''} ${isTurn ? 'active' : ''} ${p.folded && active(s) ? 'folded' : ''} ${!p.connected ? 'offline' : ''} ${won ? 'winner' : ''}" style="left:${x}%;top:${y}%"><div class="seat-cards">${p.cards.map(c => card(c)).join('')}</div><div class="seat-box">${won ? '<span class="win-tag">WINNER</span>' : ''}${badge ? `<span class="badge">${badge}</span>` : ''}<div class="seat-name">${esc(p.name)}${isMe ? '<span class="seat-label-self">你</span>' : ''}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(isTurn ? '思考中…' : status)}</div>${isTurn ? '<div class="timer-track"><div class="timer-fill"></div></div>' : ''}</div>${p.streetBet && active(s) ? `<span class="seat-bet">${num(p.streetBet)}</span>` : ''}</div>`;
+  return `<div class="seat ${isMe ? 'you' : ''} ${isTurn ? 'active' : ''} ${p.folded && active(s) ? 'folded' : ''} ${!p.connected ? 'offline' : ''} ${won ? 'winner' : ''} ${won && effects.showdown ? 'winner-arrival' : ''}" style="left:${x}%;top:${y}%"><div class="seat-cards">${p.cards.map((c, i) => card(c, effects.deal && p.inHand ? `deal-card deal-${i}` : '')).join('')}</div><div class="seat-box">${isTurn ? `<span class="seat-turn-tag ${isMe ? 'mine' : 'theirs'}">${isMe ? '轮到你' : '行动中'}</span>` : ''}${won ? '<span class="win-tag">WINNER</span>' : ''}${badge ? `<span class="badge">${badge}</span>` : ''}<div class="seat-name">${esc(p.name)}${isMe ? '<span class="seat-label-self">你</span>' : ''}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(isTurn ? '思考中…' : status)}</div>${isTurn ? '<div class="timer-track"><div class="timer-fill"></div></div>' : ''}</div>${p.streetBet && active(s) ? `<span class="seat-bet ${effects.bets.has(p.id) ? 'bet-arrival' : ''}">${num(p.streetBet)}</span>` : ''}</div>`;
 }
 function actionPanel(s, me) {
   const ready = s.players.filter(p => p.connected && !p.sittingOut && p.stack > 0 && !p.leaving).length;
   if (!active(s)) {
     const host = s.players.find(p => p.id === s.hostId);
     const wonNames = [...new Set(s.result?.pots.filter(p => !p.refund).flatMap(p => p.winners) || [])].map(id => s.players.find(p => p.id === id)?.name || '离桌玩家');
-    return `<div class="waiting-line"><div><strong>${s.result ? `${wonNames.map(esc).join('、')} 拿下这手` : '牌桌准备好了，等朋友入座。'}</strong>${ready >= 2 ? '已有 ' + ready + ' 位玩家准备好' : '至少两位在线玩家即可开局'}</div>${s.hostId === s.selfId ? `<button class="primary" data-action="start" ${ready < 2 || connection !== 'online' ? 'disabled' : ''}>${s.handNo ? '开始下一手' : '开始第一手'} →</button>` : `<span>等待 ${esc(host?.name || '房主')} 开局</span>`}</div>${s.result?.pots.length > 1 ? `<div class="results-pots">${s.result.pots.map((p, i) => `${p.refund ? '退回' : i ? '边池 ' + i : '主池'} ${num(p.amount)} → ${p.winners.map(id => esc(s.players.find(x => x.id === id)?.name || '离桌玩家')).join('、')}（${esc(p.label)}）`).join('<br>')}</div>` : ''}`;
+    return `<div class="waiting-line"><div><strong>${s.result ? `${wonNames.map(esc).join('、')} 拿下这手` : '牌桌准备好了，等朋友入座。'}</strong>${s.nextHandAt ? '下一手将在 <span id="next-hand-clock"></span> 后自动开始' : ready >= 2 ? '已有 ' + ready + ' 位玩家准备好' : '至少两位在线玩家即可开局'}</div>${s.hostId === s.selfId ? `<button class="primary" data-action="start" ${ready < 2 || connection !== 'online' ? 'disabled' : ''}>${s.handNo ? '开始下一手' : '开始第一手'} →</button>` : `<span>等待 ${esc(host?.name || '房主')} 开局</span>`}</div>${s.result?.pots.length > 1 ? `<div class="results-pots">${s.result.pots.map((p, i) => `${p.refund ? '退回' : i ? '边池 ' + i : '主池'} ${num(p.amount)} → ${p.winners.map(id => esc(s.players.find(x => x.id === id)?.name || '离桌玩家')).join('、')}（${esc(p.label)}）`).join('<br>')}</div>` : ''}`;
   }
   if (!s.legal) {
     const current = s.players.find(p => p.id === s.actorId);
@@ -58,16 +65,18 @@ function actionPanel(s, me) {
   const a = s.legal, min = Math.min(a.minRaise, a.maxRaise), disabled = actionBusy || connection !== 'online';
   return `<div class="action-caption"><strong>轮到你了 <span id="turn-clock"></span></strong><span>${a.canCheck ? '可以免费看下一张牌' : `需跟注 ${num(a.toCall)} 筹码`}</span></div><div class="action-buttons"><button class="secondary fold-btn" data-action="play" data-play="fold" ${disabled ? 'disabled' : ''}>弃牌</button><button class="secondary" data-action="play" data-play="${a.canCheck ? 'check' : 'call'}" ${disabled ? 'disabled' : ''}>${a.canCheck ? '过牌' : a.toCall === me.stack ? '全押跟注 ' + num(a.toCall) : '跟注 ' + num(a.toCall)}</button><button class="primary" id="raise-button" data-action="play" data-play="raise" ${!a.canRaise || disabled ? 'disabled' : ''}>${raiseValue === a.maxRaise ? '全押 ' : '加注至 '}${num(raiseValue)}</button></div>${a.canRaise ? `<div class="raise-options"><input id="raise-slider" type="range" aria-label="加注金额" min="${min}" max="${a.maxRaise}" step="1" value="${raiseValue}"><input id="raise-input" type="number" aria-label="加注至" min="${min}" max="${a.maxRaise}" value="${raiseValue}"><div class="presets"><button data-action="preset" data-value="min">最小</button><button data-action="preset" data-value="half">½ 底池</button><button data-action="preset" data-value="pot">底池</button><button data-action="preset" data-value="all">全押</button></div></div>` : ''}`;
 }
-function renderRoom() {
+function renderRoom(effects = { deal: false, boardFrom: 5, bets: new Set(), pot: false, showdown: false }) {
   const s = state, me = s.players.find(p => p.id === s.selfId);
   if (!me) return;
   const focused = document.activeElement?.id;
   const selection = focused === 'chat-text' ? document.activeElement.selectionStart : null;
   const positions = innerWidth <= 800 ? mobilePositions : desktopPositions;
   const rotated = Array.from({ length: 8 }, (_, i) => s.players.find(p => p.seat === (me.seat + i) % 8));
+  const actor = s.players.find(p => p.id === s.actorId);
+  const turnBanner = active(s) && actor ? `<div class="turn-banner ${actor.id === s.selfId ? 'your-turn' : 'their-turn'}" role="status"><span class="turn-indicator-dot"></span><strong>${actor.id === s.selfId ? '轮到你行动' : `轮到 ${esc(actor.name)} 行动`}</strong><span class="turn-banner-time" id="table-turn-clock"></span></div>` : '';
   app.innerHTML = `<header class="site-header table-header">${brand()}<div><span class="room-label">朋友的私人牌桌</span><button class="code-button" data-action="copy-code" title="复制房间码">${s.code} ⧉</button></div><div class="header-right"><button class="secondary" data-action="share">邀请好友 ↗</button><button class="ghost" data-action="rules">玩法</button></div></header>${connection !== 'online' ? `<div class="connection-banner" role="status">${connection === 'replaced' ? '这个座位已在另一个窗口打开。刷新可回到这里。' : '连接恢复中… 你的座位与筹码会保留。'}</div>` : ''}
-  <main class="table-layout"><section class="table-main"><div class="table-topline"><h1>${esc(s.title)}</h1><span><span class="status-dot"></span>${s.handNo ? '第 ' + s.handNo + ' 手' : '准备入座'} · 无限注德州扑克</span></div><div class="table-shell"><div class="felt"></div><div class="felt-mark">THE RIVER CLUB</div>${s.phase === 'lobby' ? `<div class="center-message"><span class="eyebrow">TAKE A SEAT</span><h2>人齐了，就开局。</h2><p>把链接发给朋友<br>两个人也能打得尽兴</p><button class="primary" data-action="share">复制邀请链接 ↗</button></div>` : `<div class="community">${Array.from({ length: 5 }, (_, i) => card(s.board[i])).join('')}</div><div class="pot-area"><div class="pot-label">${s.phase === 'showdown' ? '本手底池' : 'TOTAL POT'}</div><div class="pot-amount">◉ ${num(s.pot)}</div><div class="street-label">${phases[s.phase]}${s.result?.showdown ? ' · 已摊牌' : ''}</div></div>`}${rotated.map((p, i) => renderSeat(p, positions[i], s)).join('')}</div><div class="action-panel">${actionPanel(s, me)}</div><p class="keyboard-note">认真打牌，轻松相聚。仅使用娱乐筹码。</p></section>
-  <aside class="room-side"><section class="side-section"><div class="side-heading">桌上的朋友 <span>${s.players.length} / 8</span></div>${s.players.map(p => { const net = p.stack + (active(s) ? (s.pot ? 0 : 0) : 0) - p.buyIns; return `<div class="player-row"><span class="avatar">${esc([...p.name][0])}</span><div class="player-info"><div>${esc(p.name)}${p.id === s.hostId ? '<span class="host-tag">房主</span>' : ''}${p.id === s.selfId ? '<span class="host-tag">你</span>' : ''}</div><small>${p.leaving ? '已离桌' : !p.connected ? '离线 · 保留座位' : p.sittingOut ? '下一手休息' : p.inHand && active(s) ? (p.folded ? '已弃牌' : '牌局中') : '准备好了'}</small></div><span class="net ${net >= 0 ? 'positive' : 'negative'}">${active(s) ? num(p.stack) : (net > 0 ? '+' : '') + num(net)}</span>${!p.connected && s.hostId === s.selfId && !active(s) ? `<button class="remove-btn" data-action="remove" data-player="${p.id}" title="释放离线座位">×</button>` : ''}</div>`; }).join('')}<div class="seat-controls"><button class="secondary" data-action="sitout">${me.sittingOut ? '重新准备' : '下手休息'}</button>${me.stack === 0 && !(active(s) && me.inHand) ? '<button class="secondary" data-action="rebuy">补充筹码</button>' : ''}<button class="ghost" data-action="leave">离桌</button></div></section><section class="side-section"><div class="side-heading">牌桌设置 <button class="ghost" data-action="rules" style="font-size:11px;padding:0">查看玩法 ↗</button></div><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div></section><section class="side-section activity"><div class="side-heading">牌桌动态 <span>聊两句，好牌就来</span></div><div class="activity-log" role="log" aria-label="牌局记录">${s.log.map(l => `<div class="log-line ${l.kind}">${esc(l.text)}</div>`).join('')}</div><form class="chat-form" id="chat-form"><input id="chat-text" aria-label="发送聊天消息" placeholder="和朋友说点什么…" maxlength="160" autocomplete="off" value="${esc(chatDraft)}"><button type="submit" aria-label="发送">↑</button></form></section></aside></main>`;
+  <main class="table-layout"><section class="table-main"><div class="table-topline"><h1>${esc(s.title)}</h1><span><span class="status-dot"></span>${s.handNo ? '第 ' + s.handNo + ' 手' : '准备入座'} · 无限注德州扑克</span></div>${turnBanner}<div class="table-shell"><div class="felt"></div><div class="felt-mark">THE RIVER CLUB</div>${s.phase === 'lobby' ? `<div class="center-message"><span class="eyebrow">TAKE A SEAT</span><h2>人齐了，就开局。</h2><p>把链接发给朋友<br>两个人也能打得尽兴</p><button class="primary" data-action="share">复制邀请链接 ↗</button></div>` : `<div class="community">${Array.from({ length: 5 }, (_, i) => card(s.board[i], i >= effects.boardFrom && s.board[i] !== undefined ? `board-card board-${i - effects.boardFrom}` : '')).join('')}</div><div class="pot-area"><div class="pot-label">${s.phase === 'showdown' ? '本手底池' : 'TOTAL POT'}</div><div class="pot-amount ${effects.pot ? 'pot-pop' : ''}">◉ ${num(s.pot)}</div><div class="street-label">${phases[s.phase]}${s.result?.showdown ? ' · 已摊牌' : ''}</div></div>`}${rotated.map((p, i) => renderSeat(p, positions[i], s, effects)).join('')}</div><div class="action-panel ${s.legal ? 'your-turn' : ''}">${actionPanel(s, me)}</div><p class="keyboard-note">认真打牌，轻松相聚。仅使用娱乐筹码。</p></section>
+  <aside class="room-side"><section class="side-section"><div class="side-heading">桌上的朋友 <span>${s.players.length} / 8</span></div>${s.players.map(p => { const net = p.stack + (active(s) ? (s.pot ? 0 : 0) : 0) - p.buyIns; return `<div class="player-row"><span class="avatar">${esc([...p.name][0])}</span><div class="player-info"><div>${esc(p.name)}${p.id === s.hostId ? '<span class="host-tag">房主</span>' : ''}${p.id === s.selfId ? '<span class="host-tag">你</span>' : ''}</div><small>${p.leaving ? '已离桌' : !p.connected ? '离线 · 保留座位' : p.sittingOut ? '下一手休息' : p.inHand && active(s) ? (p.folded ? '已弃牌' : '牌局中') : '准备好了'}</small></div><span class="net ${net >= 0 ? 'positive' : 'negative'}">${active(s) ? num(p.stack) : (net > 0 ? '+' : '') + num(net)}</span>${!p.connected && s.hostId === s.selfId && !active(s) ? `<button class="remove-btn" data-action="remove" data-player="${p.id}" title="释放离线座位">×</button>` : ''}</div>`; }).join('')}<div class="seat-controls"><button class="secondary" data-action="sitout">${me.sittingOut ? '重新准备' : '下手休息'}</button>${me.stack === 0 && !(active(s) && me.inHand) ? '<button class="secondary" data-action="rebuy">补充筹码</button>' : ''}<button class="ghost" data-action="leave">离桌</button></div></section><section class="side-section"><div class="side-heading">牌桌设置 <button class="ghost" data-action="rules" style="font-size:11px;padding:0">查看玩法 ↗</button></div><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div><div class="motion-setting"><label for="motion-speed">动画速度</label><select id="motion-speed" aria-label="动画速度"><option value="fast" ${motionSpeed === 'fast' ? 'selected' : ''}>快速</option><option value="normal" ${motionSpeed === 'normal' ? 'selected' : ''}>普通</option><option value="off" ${motionSpeed === 'off' ? 'selected' : ''}>关闭</option></select></div></section><section class="side-section activity"><div class="side-heading">牌桌动态 <span>聊两句，好牌就来</span></div><div class="activity-log" role="log" aria-label="牌局记录">${s.log.map(l => `<div class="log-line ${l.kind}">${esc(l.text)}</div>`).join('')}</div><form class="chat-form" id="chat-form"><input id="chat-text" aria-label="发送聊天消息" placeholder="和朋友说点什么…" maxlength="160" autocomplete="off" value="${esc(chatDraft)}"><button type="submit" aria-label="发送">↑</button></form></section></aside></main>`;
   const activity = document.querySelector('.activity-log'); activity.scrollTop = activity.scrollHeight;
   if (focused === 'chat-text') { const el = document.querySelector('#chat-text'); el.focus({ preventScroll: true }); el.setSelectionRange(selection, selection); }
   updateClock();
@@ -97,10 +106,20 @@ function connect(code, token) {
     if (socket !== thisSocket) return;
     const message = JSON.parse(event.data);
     if (message.type === 'state') {
-      state = message.state; connection = 'online'; retry = 0; actionBusy = false;
+      const previous = state, next = message.state;
+      const sameRoom = previous?.code === next.code;
+      const deal = sameRoom && next.handNo > previous.handNo;
+      const sameHand = sameRoom && next.handNo === previous.handNo;
+      const boardFrom = sameHand ? previous.board.length : deal ? 0 : 5;
+      const bets = new Set(sameRoom ? next.players.filter(p => {
+        const before = previous.players.find(old => old.id === p.id);
+        return p.streetBet > (sameHand && previous.phase === next.phase ? before?.streetBet || 0 : 0);
+      }).map(p => p.id) : []);
+      const effects = { deal, boardFrom, bets, pot: sameHand && next.pot > previous.pot, showdown: sameHand && previous.phase !== 'showdown' && next.phase === 'showdown' };
+      state = next; connection = 'online'; retry = 0; actionBusy = false;
       clockOffset = state.serverTime - Date.now();
       if (state.turnId !== lastTurn) { raiseValue = state.legal ? Math.min(state.legal.minRaise, state.legal.maxRaise) : 0; lastTurn = state.turnId; }
-      renderRoom();
+      renderRoom(effects);
     } else if (message.type === 'auth-error') {
       intentional = true; storage.remove('river:room:' + code); formError = message.error; renderLanding();
     } else if (message.type === 'error') {
@@ -154,7 +173,10 @@ app.addEventListener('input', event => {
   if (event.target.id === 'room-code') { event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); currentCode = event.target.value; }
   if (event.target.id === 'raise-slider') updateRaise(event.target.value);
 });
-app.addEventListener('change', event => { if (event.target.id === 'raise-input') updateRaise(event.target.value); });
+app.addEventListener('change', event => {
+  if (event.target.id === 'raise-input') updateRaise(event.target.value);
+  if (event.target.id === 'motion-speed') { setMotionSpeed(event.target.value); storage.set('river:motion', motionSpeed); }
+});
 app.addEventListener('click', event => {
   const button = event.target.closest('[data-action]'); if (!button) return;
   const action = button.dataset.action;
@@ -177,10 +199,13 @@ app.addEventListener('click', event => {
 document.querySelector('.close-dialog').addEventListener('click', () => document.querySelector('#rules').close());
 document.querySelector('#rules').addEventListener('click', event => { if (event.target === document.querySelector('#rules')) { const r = event.target.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) event.target.close(); } });
 function updateClock() {
+  const next = document.querySelector('#next-hand-clock');
+  if (next && state?.nextHandAt) next.textContent = Math.max(0, Math.ceil((state.nextHandAt - Date.now() - clockOffset) / 1000)) + ' 秒';
   if (!state?.deadline) return;
   const seconds = Math.max(0, Math.ceil((state.deadline - Date.now() - clockOffset) / 1000));
   const fill = document.querySelector('.timer-fill'); if (fill) fill.style.width = Math.min(100, seconds / state.settings.turnSeconds * 100) + '%';
   const clock = document.querySelector('#turn-clock'); if (clock) clock.textContent = `· ${seconds}s`;
+  const tableClock = document.querySelector('#table-turn-clock'); if (tableClock) tableClock.textContent = `${seconds} 秒`;
 }
 setInterval(updateClock, 250);
 let resizeTimer;

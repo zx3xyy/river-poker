@@ -55,7 +55,7 @@ export function log(room, text, kind = 'game') {
 }
 
 export function createRoom(code, settings) {
-  return { code, settings, hostId: null, players: [], phase: 'lobby', handNo: 0, button: -1, smallBlindId: null, bigBlindId: null, board: [], deck: [], actorId: null, deadline: null, turnId: 0, currentBet: 0, minRaise: settings.bigBlind, log: [], result: null, createdAt: Date.now(), updatedAt: Date.now(), revision: 0 };
+  return { code, settings, hostId: null, players: [], phase: 'lobby', handNo: 0, button: -1, smallBlindId: null, bigBlindId: null, board: [], deck: [], actorId: null, deadline: null, nextHandAt: null, turnId: 0, currentBet: 0, minRaise: settings.bigBlind, log: [], result: null, createdAt: Date.now(), updatedAt: Date.now(), revision: 0 };
 }
 
 export function addPlayer(room, name) {
@@ -102,6 +102,7 @@ export function startHand(room, playerId, deck = shuffledDeck()) {
   room.deck = [...deck];
   room.board = [];
   room.phase = 'preflop';
+  room.nextHandAt = null;
   room.handNo++;
   room.result = null;
   room.minRaise = room.settings.bigBlind;
@@ -249,7 +250,7 @@ export function publicState(room, selfId) {
   return {
     code: room.code, title: room.settings.title, settings: room.settings, hostId: room.hostId, selfId,
     phase: room.phase, handNo: room.handNo, button: room.button, smallBlindId: room.smallBlindId, bigBlindId: room.bigBlindId,
-    board: room.board, actorId: room.actorId, deadline: room.deadline, serverTime: Date.now(), turnId: room.turnId,
+    board: room.board, actorId: room.actorId, deadline: room.deadline, nextHandAt: room.nextHandAt ?? null, serverTime: Date.now(), turnId: room.turnId,
     currentBet: room.currentBet, pot: room.players.reduce((n, p) => n + p.totalBet, 0), legal: legalActions(room, selfId),
     log: room.log, result: room.result, revision: room.revision,
     players: room.players.map(p => ({

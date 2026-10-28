@@ -26,7 +26,7 @@ test('real clients: password, private cards, complete hand, reconnect and restar
     const c = { ws, state: null, errors: [] };
     c.wait = predicate => new Promise((resolve, reject) => {
       if (predicate(c)) return resolve(c);
-      const timer = setTimeout(() => { ws.off('message', check); reject(new Error('Waiting for client state')); }, 3000);
+      const timer = setTimeout(() => { ws.off('message', check); reject(new Error('Waiting for client state')); }, 8000);
       function check() { if (predicate(c)) { clearTimeout(timer); ws.off('message', check); resolve(c); } }
       ws.on('message', check);
     });
@@ -66,6 +66,19 @@ test('real clients: password, private cards, complete hand, reconnect and restar
     }
     assert.equal(clients[0].state.players.reduce((sum, p) => sum + p.stack, 0), 6000);
     assert.equal(clients[0].state.board.length, 5);
+    assert.ok(clients[0].state.nextHandAt > Date.now());
+    // Pausing enough players stops the countdown; coming back starts it again.
+    clients[1].send({ type: 'sitout' });
+    clients[2].send({ type: 'sitout' });
+    await clients[0].wait(c => c.state.nextHandAt === null);
+    clients[1].send({ type: 'sitout' });
+    await clients[0].wait(c => c.state.nextHandAt > Date.now());
+    await clients[0].wait(c => c.state.handNo === 2);
+    assert.equal(clients[0].state.phase, 'preflop');
+    const actor = clients.find(c => c.state.selfId === clients[0].state.actorId);
+    await actor.wait(c => c.state.legal);
+    actor.send({ type: 'action', action: 'fold', turnId: actor.state.turnId });
+    await clients[0].wait(c => c.state.phase === 'showdown');
     const savedId = clients[0].state.selfId;
     clients[0].ws.close();
     const restored = await connect(a); assert.equal(restored.state.selfId, savedId);

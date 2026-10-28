@@ -37,6 +37,11 @@ function save() {
   renameSync(STATE_PATH + '.tmp', STATE_PATH);
 }
 function commit(room) {
+  if (room.phase === 'showdown') {
+    const ready = room.players.filter(p => p.connected && !p.sittingOut && p.stack > 0 && !p.leaving).length;
+    if (ready >= 2 && room.players.some(p => p.id === room.hostId && p.connected && !p.leaving)) room.nextHandAt ??= Date.now() + 5000;
+    else room.nextHandAt = null;
+  } else room.nextHandAt = null;
   room.updatedAt = Date.now();
   room.revision++;
   save();
@@ -104,7 +109,7 @@ function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(data));
 }
-const files = new Map(['/index.html', '/styles.css', '/app.js', '/favicon.svg'].map(path => [path, readFileSync(resolve(ROOT, 'public', path.slice(1)))]));
+const files = new Set(['/index.html', '/styles.css', '/app.js', '/favicon.svg']);
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -152,7 +157,7 @@ const server = http.createServer(async (req, res) => {
     const path = url.pathname === '/' ? '/index.html' : url.pathname;
     if (!files.has(path)) return json(res, 404, { error: '页面不存在。' });
     res.writeHead(200, { 'Content-Type': types[extname(path)], 'Cache-Control': 'no-cache' });
-    res.end(req.method === 'HEAD' ? undefined : files.get(path));
+    res.end(req.method === 'HEAD' ? undefined : readFileSync(resolve(ROOT, 'public', path.slice(1))));
   } catch (error) { json(res, 400, { error: error.message }); }
 });
 
@@ -237,6 +242,10 @@ wss.on('connection', (ws, req) => {
 
 const ticker = setInterval(() => {
   for (const room of rooms.values()) {
+    if (room.phase === 'showdown' && room.nextHandAt && Date.now() >= room.nextHandAt) {
+      try { startHand(room, room.hostId); commit(room); }
+      catch (e) { room.nextHandAt = null; console.error('Next hand:', room.code, e.message); commit(room); }
+    }
     if (ACTIVE.has(room.phase) && room.deadline && Date.now() >= room.deadline) {
       const p = room.players.find(p => p.id === room.actorId);
       if (p) {
