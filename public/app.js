@@ -17,78 +17,58 @@ function setMotionSpeed(value) {
 }
 setMotionSpeed(motionSpeed);
 
-// A quiet, locally synthesized loop keeps the table independent of external music services.
+// A normal audio element works in more in-app browsers, including mobile webviews.
 let musicEnabled = storage.get('river:music') !== 'off';
 const savedVolume = storage.get('river:music-volume');
 let musicVolume = savedVolume !== null && Number.isFinite(Number(savedVolume)) ? Math.max(0, Math.min(100, Number(savedVolume))) : 40;
-let audioContext = null, musicGain = null, musicTimer = null, musicPlaying = false, musicNext = 0, musicStep = 0;
-const melody = [72, 76, 79, 76, 74, 71, 67, 71, 69, 72, 76, 72, 71, 69, 64, 67, 65, 69, 72, 69, 67, 65, 62, 65, 67, 71, 74, 71, 69, 67, 62, 67];
-const chords = [[48, 55, 60, 64], [45, 52, 57, 60], [41, 48, 53, 57], [43, 50, 55, 59]];
+let musicAudio = null, musicPlaying = false, musicStarting = false;
 function musicButton() {
-  return `<button class="music-toggle ghost" data-action="music" aria-pressed="${musicEnabled}" title="${musicEnabled && !musicPlaying ? '点击播放背景音乐' : '切换背景音乐'}">♫ ${musicEnabled ? (musicPlaying ? '音乐开' : '播放音乐') : '音乐关'}</button>`;
+  return `<button class="music-toggle ghost" data-action="music" aria-pressed="${musicEnabled && musicPlaying}" title="切换背景音乐">♫ ${musicEnabled && musicPlaying ? '音乐开' : '播放音乐'}</button>`;
 }
 function syncMusicControls() {
   document.querySelectorAll('[data-action="music"]').forEach(button => {
-    button.setAttribute('aria-pressed', String(musicEnabled));
-    button.textContent = `♫ ${musicEnabled ? (musicPlaying ? '音乐开' : '播放音乐') : '音乐关'}`;
-    button.title = musicEnabled && !musicPlaying ? '点击播放背景音乐' : '切换背景音乐';
+    button.setAttribute('aria-pressed', String(musicEnabled && musicPlaying));
+    button.textContent = `♫ ${musicEnabled && musicPlaying ? '音乐开' : '播放音乐'}`;
   });
 }
-function playTone(note, at, length, volume) {
-  const oscillator = audioContext.createOscillator(), envelope = audioContext.createGain();
-  oscillator.type = 'sine';
-  oscillator.frequency.setValueAtTime(440 * 2 ** ((note - 69) / 12), at);
-  envelope.gain.setValueAtTime(0.0001, at);
-  envelope.gain.exponentialRampToValueAtTime(volume, at + 0.06);
-  envelope.gain.exponentialRampToValueAtTime(0.0001, at + length);
-  oscillator.connect(envelope).connect(musicGain);
-  oscillator.start(at); oscillator.stop(at + length + 0.02);
-}
-function scheduleMusic() {
-  if (!audioContext || audioContext.state !== 'running' || !musicEnabled) return;
-  if (musicNext < audioContext.currentTime) musicNext = audioContext.currentTime + 0.03;
-  while (musicNext < audioContext.currentTime + 0.25) {
-    if (musicStep % 8 === 0) chords[Math.floor(musicStep / 8) % chords.length].forEach((note, i) => playTone(note, musicNext + i * 0.035, 2.8, 0.1));
-    playTone(melody[musicStep % melody.length], musicNext, 1.1, 0.12);
-    musicStep++; musicNext += 0.38;
-  }
-}
 function startMusic() {
-  if (!musicEnabled || musicTimer) return;
+  if (!musicEnabled || musicPlaying || musicStarting) return;
   try {
-    const Audio = window.AudioContext || window.webkitAudioContext;
-    if (!Audio) { musicEnabled = false; syncMusicControls(); return toast('此浏览器暂不支持背景音乐。'); }
-    if (!audioContext) {
-      audioContext = new Audio();
-      musicGain = audioContext.createGain();
-      musicGain.gain.value = musicVolume / 100;
-      musicGain.connect(audioContext.destination);
+    if (!musicAudio) {
+      musicAudio = new Audio('/music.mp3');
+      musicAudio.loop = true;
+      musicAudio.preload = 'auto';
+      musicAudio.addEventListener('pause', () => { musicPlaying = false; syncMusicControls(); });
+      musicAudio.addEventListener('error', () => { musicStarting = false; musicPlaying = false; syncMusicControls(); toast('音乐加载失败，请检查网络后重试。'); });
     }
-    musicGain.gain.setTargetAtTime(musicVolume / 100, audioContext.currentTime, 0.04);
-    audioContext.resume().then(() => {
-      if (!musicEnabled || !musicTimer || audioContext.state !== 'running') return;
-      musicPlaying = true; syncMusicControls(); scheduleMusic();
-    }).catch(() => { clearInterval(musicTimer); musicTimer = null; musicPlaying = false; syncMusicControls(); });
-    musicNext = audioContext.currentTime + 0.05;
-    musicTimer = setInterval(scheduleMusic, 100);
-  } catch { clearInterval(musicTimer); musicTimer = null; musicPlaying = false; syncMusicControls(); }
+    musicAudio.volume = musicVolume / 100;
+    // Invoke play synchronously inside the tap/click handler for iOS and WeChat.
+    const started = musicAudio.play();
+    musicStarting = true;
+    Promise.resolve(started).then(() => {
+      musicStarting = false;
+      if (!musicEnabled) { musicAudio.pause(); return; }
+      musicPlaying = true; syncMusicControls();
+    }).catch(() => {
+      musicStarting = false; musicPlaying = false; syncMusicControls();
+      toast('请点击“播放音乐”，并检查手机媒体音量。');
+    });
+  } catch { musicStarting = false; musicPlaying = false; syncMusicControls(); toast('暂时无法播放音乐，请检查手机媒体音量。'); }
 }
 function stopMusic() {
-  clearInterval(musicTimer); musicTimer = null; musicPlaying = false;
-  if (audioContext && musicGain) {
-    musicGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.04);
-    setTimeout(() => { if (!musicEnabled && audioContext?.state === 'running') audioContext.suspend(); }, 200);
-  }
+  if (musicAudio) musicAudio.pause();
+  musicStarting = false; musicPlaying = false;
 }
 function setMusicVolume(value) {
   musicVolume = Math.max(0, Math.min(100, Number(value) || 0));
   storage.set('river:music-volume', String(musicVolume));
-  if (audioContext && musicGain && musicEnabled) musicGain.gain.setTargetAtTime(musicVolume / 100, audioContext.currentTime, 0.04);
+  if (musicAudio) musicAudio.volume = musicVolume / 100;
 }
 function unlockMusic(event) {
   if (!event.target.closest?.('[data-action="music"], #music-volume') && musicEnabled && !musicPlaying) startMusic();
 }
-document.addEventListener('pointerdown', unlockMusic, { capture: true });
+document.addEventListener('touchend', unlockMusic, { capture: true });
+document.addEventListener('click', unlockMusic, { capture: true });
 document.addEventListener('keydown', unlockMusic, { capture: true });
 
 function card(value, extra = '') {
