@@ -71,6 +71,40 @@ document.addEventListener('touchend', unlockMusic, { capture: true });
 document.addEventListener('click', unlockMusic, { capture: true });
 document.addEventListener('keydown', unlockMusic, { capture: true });
 
+// Only the player's own cards and the public board are used for this display.
+function currentHandType(cards) {
+  if (!cards.length) return '';
+  const ranks = '23456789TJQKA';
+  const counts = new Map();
+  const suits = new Map();
+  for (const card of cards) {
+    const rank = ranks.indexOf(card[0]) + 2;
+    counts.set(rank, (counts.get(rank) || 0) + 1);
+    if (!suits.has(card[1])) suits.set(card[1], []);
+    suits.get(card[1]).push(rank);
+  }
+  const straightHigh = values => {
+    const unique = new Set(values);
+    if (unique.has(14)) unique.add(1);
+    for (let high = 14; high >= 5; high--) {
+      if ([0, 1, 2, 3, 4].every(offset => unique.has(high - offset))) return high;
+    }
+    return 0;
+  };
+  const flushRanks = [...suits.values()].find(values => values.length >= 5);
+  const straightFlush = flushRanks && straightHigh(flushRanks);
+  const groups = [...counts.values()];
+  if (straightFlush) return straightFlush === 14 ? '皇家同花顺' : '同花顺';
+  if (groups.some(n => n >= 4)) return '四条';
+  if (groups.some(n => n >= 3) && groups.filter(n => n >= 2).length >= 2) return '葫芦';
+  if (flushRanks) return '同花';
+  if (straightHigh(counts.keys())) return '顺子';
+  if (groups.some(n => n >= 3)) return '三条';
+  if (groups.filter(n => n >= 2).length >= 2) return '两对';
+  if (groups.some(n => n >= 2)) return '一对';
+  return '高牌';
+}
+
 function card(value, extra = '') {
   if (value === undefined) return `<div class="card empty ${extra}" aria-label="尚未发牌">♠</div>`;
   if (value === null) return `<div class="card back ${extra}" aria-label="隐藏的底牌"></div>`;
@@ -127,9 +161,10 @@ function renderRoom(effects = { deal: false, boardFrom: 5, bets: new Set(), pot:
   const positions = innerWidth <= 800 ? mobilePositions : desktopPositions;
   const rotated = Array.from({ length: 8 }, (_, i) => s.players.find(p => p.seat === (me.seat + i) % 8));
   const actor = s.players.find(p => p.id === s.actorId);
+  const handType = me.inHand && !me.folded && me.cards.length === 2 ? currentHandType([...me.cards, ...s.board]) : '';
   const turnBanner = active(s) && actor ? `<div class="turn-banner ${actor.id === s.selfId ? 'your-turn' : 'their-turn'}" role="status"><span class="turn-indicator-dot"></span><strong>${actor.id === s.selfId ? '轮到你行动' : `轮到 ${esc(actor.name)} 行动`}</strong><span class="turn-banner-time" id="table-turn-clock"></span></div>` : '';
   app.innerHTML = `<header class="site-header table-header">${brand()}<div><span class="room-label">朋友的私人牌桌</span><button class="code-button" data-action="copy-code" title="复制房间码">${s.code} ⧉</button></div><div class="header-right">${musicButton()}<button class="secondary" data-action="share">邀请好友 ↗</button><button class="ghost" data-action="rules">玩法</button></div></header>${connection !== 'online' ? `<div class="connection-banner" role="status">${connection === 'replaced' ? '这个座位已在另一个窗口打开。刷新可回到这里。' : '连接恢复中… 你的座位与筹码会保留。'}</div>` : ''}
-  <main class="table-layout"><section class="table-main"><div class="table-topline"><h1>${esc(s.title)}</h1><span><span class="status-dot"></span>${s.handNo ? '第 ' + s.handNo + ' 手' : '准备入座'} · 无限注德州扑克</span></div>${turnBanner}<div class="table-shell"><div class="felt"></div><div class="felt-mark">THE RIVER CLUB</div>${s.phase === 'lobby' ? `<div class="center-message"><span class="eyebrow">TAKE A SEAT</span><h2>人齐了，就开局。</h2><p>把链接发给朋友<br>两个人也能打得尽兴</p><button class="primary" data-action="share">复制邀请链接 ↗</button></div>` : `<div class="community">${Array.from({ length: 5 }, (_, i) => card(s.board[i], i >= effects.boardFrom && s.board[i] !== undefined ? `board-card board-${i - effects.boardFrom}` : '')).join('')}</div><div class="pot-area"><div class="pot-label">${s.phase === 'showdown' ? '本手底池' : 'TOTAL POT'}</div><div class="pot-amount ${effects.pot ? 'pot-pop' : ''}">◉ ${num(s.pot)}</div><div class="street-label">${phases[s.phase]}${s.result?.showdown ? ' · 已摊牌' : ''}</div></div>`}${rotated.map((p, i) => renderSeat(p, positions[i], s, effects)).join('')}</div><div class="action-panel ${s.legal ? 'your-turn' : ''}">${actionPanel(s, me)}</div><p class="keyboard-note">认真打牌，轻松相聚。仅使用娱乐筹码。</p></section>
+  <main class="table-layout"><section class="table-main"><div class="table-topline"><h1>${esc(s.title)}</h1><span><span class="status-dot"></span>${s.handNo ? '第 ' + s.handNo + ' 手' : '准备入座'} · 无限注德州扑克</span></div>${turnBanner}<div class="table-shell"><div class="felt"></div><div class="felt-mark">THE RIVER CLUB</div>${s.phase === 'lobby' ? `<div class="center-message"><span class="eyebrow">TAKE A SEAT</span><h2>人齐了，就开局。</h2><p>把链接发给朋友<br>两个人也能打得尽兴</p><button class="primary" data-action="share">复制邀请链接 ↗</button></div>` : `<div class="community">${Array.from({ length: 5 }, (_, i) => card(s.board[i], i >= effects.boardFrom && s.board[i] !== undefined ? `board-card board-${i - effects.boardFrom}` : '')).join('')}</div><div class="pot-area"><div class="pot-label">${s.phase === 'showdown' ? '本手底池' : 'TOTAL POT'}</div><div class="pot-amount ${effects.pot ? 'pot-pop' : ''}">◉ ${num(s.pot)}</div><div class="street-label">${phases[s.phase]}${s.result?.showdown ? ' · 已摊牌' : ''}</div></div>`}${rotated.map((p, i) => renderSeat(p, positions[i], s, effects)).join('')}</div><div class="action-panel ${s.legal ? 'your-turn' : ''}">${handType ? `<div class="current-hand" aria-label="你的当前牌型：${handType}"><span>你的牌型</span><strong>${handType}</strong></div>` : ''}${actionPanel(s, me)}</div><p class="keyboard-note">认真打牌，轻松相聚。仅使用娱乐筹码。</p></section>
   <aside class="room-side"><section class="side-section"><div class="side-heading">桌上的朋友 <span>${s.players.length} / 8</span></div>${s.players.map(p => { const net = p.stack + (active(s) ? (s.pot ? 0 : 0) : 0) - p.buyIns; return `<div class="player-row"><span class="avatar">${esc([...p.name][0])}</span><div class="player-info"><div>${esc(p.name)}${p.id === s.hostId ? '<span class="host-tag">房主</span>' : ''}${p.id === s.selfId ? '<span class="host-tag">你</span>' : ''}</div><small>${p.leaving ? '已离桌' : !p.connected ? '离线 · 保留座位' : p.sittingOut ? '下一手休息' : p.inHand && active(s) ? (p.folded ? '已弃牌' : '牌局中') : '准备好了'}</small></div><span class="net ${net >= 0 ? 'positive' : 'negative'}">${active(s) ? num(p.stack) : (net > 0 ? '+' : '') + num(net)}</span>${!p.connected && s.hostId === s.selfId && !active(s) ? `<button class="remove-btn" data-action="remove" data-player="${p.id}" title="释放离线座位">×</button>` : ''}</div>`; }).join('')}<div class="seat-controls"><button class="secondary" data-action="sitout">${me.sittingOut ? '重新准备' : '下手休息'}</button>${me.stack === 0 && !(active(s) && me.inHand) ? '<button class="secondary" data-action="rebuy">补充筹码</button>' : ''}<button class="ghost" data-action="leave">离桌</button></div></section><section class="side-section"><div class="side-heading">牌桌设置 <button class="ghost" data-action="rules" style="font-size:11px;padding:0">查看玩法 ↗</button></div><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div><div class="motion-setting"><label for="motion-speed">动画速度</label><select id="motion-speed" aria-label="动画速度"><option value="fast" ${motionSpeed === 'fast' ? 'selected' : ''}>快速</option><option value="normal" ${motionSpeed === 'normal' ? 'selected' : ''}>普通</option><option value="off" ${motionSpeed === 'off' ? 'selected' : ''}>关闭</option></select></div><div class="music-setting"><div class="music-setting-title"><span>背景音乐</span>${musicButton()}</div><label for="music-volume" class="music-volume-label">音量 <span>${musicVolume}%</span></label><input type="range" id="music-volume" min="0" max="100" step="1" value="${musicVolume}" aria-label="音乐音量"></div></section><section class="side-section activity"><div class="side-heading">牌桌动态 <span>聊两句，好牌就来</span></div><div class="activity-log" role="log" aria-label="牌局记录">${s.log.map(l => `<div class="log-line ${l.kind}">${esc(l.text)}</div>`).join('')}</div><form class="chat-form" id="chat-form"><input id="chat-text" aria-label="发送聊天消息" placeholder="和朋友说点什么…" maxlength="160" autocomplete="off" value="${esc(chatDraft)}"><button type="submit" aria-label="发送">↑</button></form></section></aside></main>`;
   const activity = document.querySelector('.activity-log'); activity.scrollTop = activity.scrollHeight;
   if (focused === 'chat-text') { const el = document.querySelector('#chat-text'); el.focus({ preventScroll: true }); el.setSelectionRange(selection, selection); }
