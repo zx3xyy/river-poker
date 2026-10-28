@@ -38,6 +38,14 @@ test('real clients: password, private cards, complete hand, reconnect and restar
   }
   try {
     await boot();
+    const fullAudio = await fetch(base + '/music-airport.mp3');
+    assert.equal(fullAudio.status, 200);
+    const audioBytes = new Uint8Array(await fullAudio.arrayBuffer());
+    const partialAudio = await fetch(base + '/music-airport.mp3', { headers: { Range: 'bytes=10-29' } });
+    assert.equal(partialAudio.status, 206);
+    assert.equal(partialAudio.headers.get('content-range'), `bytes 10-29/${audioBytes.length}`);
+    assert.deepEqual(new Uint8Array(await partialAudio.arrayBuffer()), audioBytes.slice(10, 30));
+    assert.equal((await fetch(base + '/music-airport.mp3', { headers: { Range: 'bytes=999999999-' } })).status, 416);
     const a = await post('/api/rooms', { name: 'Alpha', password: 'test-only', turnSeconds: 90 });
     assert.equal(a.status, 201);
     assert.equal((await post(`/api/rooms/${a.code}/join`, { name: 'Wrong', password: 'bad' })).status, 400);

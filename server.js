@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, statSync, createReadStream } from 'node:fs';
 import { dirname, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -109,7 +109,7 @@ function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(data));
 }
-const files = new Set(['/index.html', '/styles.css', '/app.js', '/favicon.svg', '/music.mp3']);
+const files = new Set(['/index.html', '/styles.css', '/app.js', '/favicon.svg', '/music.mp3', '/music-airport.mp3', '/music-study.mp3']);
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg' };
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -156,6 +156,26 @@ const server = http.createServer(async (req, res) => {
     }
     const path = url.pathname === '/' ? '/index.html' : url.pathname;
     if (!files.has(path)) return json(res, 404, { error: '页面不存在。' });
+    if (path.endsWith('.mp3')) {
+      const file = resolve(ROOT, 'public', path.slice(1));
+      const size = statSync(file).size;
+      let start = 0, end = size - 1, status = 200;
+      if (req.headers.range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+        if (!match || (!match[1] && !match[2])) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end(); }
+        if (!match[1]) { const suffix = Number(match[2]); start = Math.max(0, size - suffix); }
+        else { start = Number(match[1]); if (match[2]) end = Math.min(Number(match[2]), size - 1); }
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= size) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end(); }
+        status = 206;
+      }
+      const headers = { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-cache', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1 };
+      if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+      res.writeHead(status, headers);
+      if (req.method === 'HEAD') return res.end();
+      const stream = createReadStream(file, { start, end });
+      stream.on('error', () => res.destroy());
+      return stream.pipe(res);
+    }
     res.writeHead(200, { 'Content-Type': types[extname(path)], 'Cache-Control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : readFileSync(resolve(ROOT, 'public', path.slice(1))));
   } catch (error) { json(res, 400, { error: error.message }); }

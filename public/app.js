@@ -17,11 +17,18 @@ function setMotionSpeed(value) {
 }
 setMotionSpeed(motionSpeed);
 
-// A normal audio element works in more in-app browsers, including mobile webviews.
+// These recordings are licensed with attribution; each has a separate stream.
+const musicTracks = [
+  { name: 'Local Forecast - Slower', src: '/music.mp3?v=jazz2', source: 'https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1300011' },
+  { name: 'Airport Lounge', src: '/music-airport.mp3', source: 'https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100806' },
+  { name: 'Study And Relax', src: '/music-study.mp3', source: 'https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900030' }
+];
 let musicEnabled = storage.get('river:music') !== 'off';
 const savedVolume = storage.get('river:music-volume');
 let musicVolume = savedVolume !== null && Number.isFinite(Number(savedVolume)) ? Math.max(0, Math.min(100, Number(savedVolume))) : 40;
-let musicAudio = null, musicPlaying = false, musicStarting = false;
+let musicAudio = null, musicPlaying = false, musicStarting = false, musicAttempt = 0;
+const savedTrack = Number(storage.get('river:music-track'));
+let musicTrackIndex = Number.isInteger(savedTrack) && musicTracks[savedTrack] ? savedTrack : 0;
 function musicButton() {
   return `<button class="music-toggle ghost" data-action="music" aria-pressed="${musicEnabled && musicPlaying}" title="切换背景音乐">♫ ${musicEnabled && musicPlaying ? '音乐开' : '播放音乐'}</button>`;
 }
@@ -30,32 +37,55 @@ function syncMusicControls() {
     button.setAttribute('aria-pressed', String(musicEnabled && musicPlaying));
     button.textContent = `♫ ${musicEnabled && musicPlaying ? '音乐开' : '播放音乐'}`;
   });
+  const select = document.querySelector('#music-track');
+  if (select) select.value = String(musicTrackIndex);
+}
+function selectMusicTrack(value, shouldPlay = musicPlaying || musicStarting) {
+  const index = Number(value);
+  if (!Number.isInteger(index) || !musicTracks[index]) return;
+  musicTrackIndex = index;
+  storage.set('river:music-track', String(index));
+  if (musicAudio) {
+    musicAttempt++;
+    musicAudio.pause();
+    musicAudio.src = musicTracks[index].src;
+    musicPlaying = false; musicStarting = false;
+    if (shouldPlay && musicEnabled) startMusic();
+  }
+  syncMusicControls();
 }
 function startMusic() {
   if (!musicEnabled || musicPlaying || musicStarting) return;
   try {
     if (!musicAudio) {
-      musicAudio = new Audio('/music.mp3');
-      musicAudio.loop = true;
+      musicAudio = new Audio(musicTracks[musicTrackIndex].src);
+      musicAudio.id = 'background-audio';
+      musicAudio.hidden = true;
+      document.body.appendChild(musicAudio);
       musicAudio.preload = 'auto';
-      musicAudio.addEventListener('pause', () => { musicPlaying = false; syncMusicControls(); });
+      musicAudio.addEventListener('ended', () => { if (musicEnabled) selectMusicTrack((musicTrackIndex + 1) % musicTracks.length, true); });
+      musicAudio.addEventListener('pause', () => { if (musicAudio.paused) { musicPlaying = false; syncMusicControls(); } });
       musicAudio.addEventListener('error', () => { musicStarting = false; musicPlaying = false; syncMusicControls(); toast('音乐加载失败，请检查网络后重试。'); });
     }
     musicAudio.volume = musicVolume / 100;
-    // Invoke play synchronously inside the tap/click handler for iOS and WeChat.
+    // play() is called directly in the tap handler for iOS and WeChat.
+    const attempt = ++musicAttempt;
     const started = musicAudio.play();
     musicStarting = true;
     Promise.resolve(started).then(() => {
+      if (attempt !== musicAttempt) return;
       musicStarting = false;
       if (!musicEnabled) { musicAudio.pause(); return; }
       musicPlaying = true; syncMusicControls();
     }).catch(() => {
+      if (attempt !== musicAttempt) return;
       musicStarting = false; musicPlaying = false; syncMusicControls();
       toast('请点击“播放音乐”，并检查手机媒体音量。');
     });
   } catch { musicStarting = false; musicPlaying = false; syncMusicControls(); toast('暂时无法播放音乐，请检查手机媒体音量。'); }
 }
 function stopMusic() {
+  musicAttempt++;
   if (musicAudio) musicAudio.pause();
   musicStarting = false; musicPlaying = false;
 }
@@ -172,7 +202,7 @@ function renderRoom(effects = { deal: false, boardFrom: 5, bets: new Set(), pot:
       <div class="panel-body">${s.players.map(p => { const net = p.stack - p.buyIns; return `<div class="player-row"><span class="avatar">${esc([...p.name][0])}</span><div class="player-info"><div>${esc(p.name)}${p.id === s.hostId ? '<span class="host-tag">房主</span>' : ''}${p.id === s.selfId ? '<span class="host-tag">你</span>' : ''}</div><small>${p.leaving ? '已离桌' : !p.connected ? '离线 · 保留座位' : p.sittingOut ? '下一手休息' : p.inHand && active(s) ? (p.folded ? '已弃牌' : '牌局中') : '准备好了'}</small></div><span class="net ${net >= 0 ? 'positive' : 'negative'}">${active(s) ? num(p.stack) : (net > 0 ? '+' : '') + num(net)}</span>${!p.connected && s.hostId === s.selfId && !active(s) ? `<button class="remove-btn" data-action="remove" data-player="${p.id}" title="释放离线座位">×</button>` : ''}</div>`; }).join('')}<div class="seat-controls"><button class="secondary" data-action="sitout">${me.sittingOut ? '重新准备' : '下手休息'}</button>${me.stack === 0 && !(active(s) && me.inHand) ? '<button class="secondary" data-action="rebuy">补充筹码</button>' : ''}<button class="ghost" data-action="leave">离桌</button></div></div>
     </details>
     <details class="room-panel" id="panel-settings" ${openPanels.has('panel-settings') ? 'open' : ''}>
-      <summary>牌桌设置 <span>⚙</span></summary><div class="panel-body"><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div><div class="motion-setting"><label for="motion-speed">动画速度</label><select id="motion-speed" aria-label="动画速度"><option value="fast" ${motionSpeed === 'fast' ? 'selected' : ''}>快速</option><option value="normal" ${motionSpeed === 'normal' ? 'selected' : ''}>普通</option><option value="off" ${motionSpeed === 'off' ? 'selected' : ''}>关闭</option></select></div><div class="music-setting"><div class="music-setting-title"><span>背景音乐</span>${musicButton()}</div><label for="music-volume" class="music-volume-label">音量 <span>${musicVolume}%</span></label><input type="range" id="music-volume" min="0" max="100" step="1" value="${musicVolume}" aria-label="音乐音量"></div><button class="ghost panel-rules" data-action="rules">查看玩法 ↗</button></div>
+      <summary>牌桌设置 <span>⚙</span></summary><div class="panel-body"><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div><div class="motion-setting"><label for="motion-speed">动画速度</label><select id="motion-speed" aria-label="动画速度"><option value="fast" ${motionSpeed === 'fast' ? 'selected' : ''}>快速</option><option value="normal" ${motionSpeed === 'normal' ? 'selected' : ''}>普通</option><option value="off" ${motionSpeed === 'off' ? 'selected' : ''}>关闭</option></select></div><div class="music-setting"><div class="music-setting-title"><span>背景音乐</span>${musicButton()}</div><label for="music-track" class="music-volume-label">选择曲目</label><select id="music-track" aria-label="选择音乐">${musicTracks.map((track, i) => `<option value="${i}" ${musicTrackIndex === i ? 'selected' : ''}>${esc(track.name)}</option>`).join('')}</select><label for="music-volume" class="music-volume-label">音量 <span>${musicVolume}%</span></label><input type="range" id="music-volume" min="0" max="100" step="1" value="${musicVolume}" aria-label="音乐音量"><details class="music-credits"><summary>音乐来源</summary><p>${musicTracks.map(track => `<a href="${track.source}" target="_blank" rel="noopener noreferrer">${esc(track.name)}</a>`).join(' · ')}<br>Kevin MacLeod · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>；已转码。</p></details></div><button class="ghost panel-rules" data-action="rules">查看玩法 ↗</button></div>
     </details>
     <details class="room-panel" id="panel-chat" ${openPanels.has('panel-chat') ? 'open' : ''}>
       <summary>聊天与记录 <span>↗</span></summary><div class="panel-body activity"><div class="activity-log" role="log" aria-label="牌局记录">${s.log.map(l => `<div class="log-line ${l.kind}">${esc(l.text)}</div>`).join('')}</div><form class="chat-form" id="chat-form"><input id="chat-text" aria-label="发送聊天消息" placeholder="和朋友说点什么…" maxlength="160" autocomplete="off" value="${esc(chatDraft)}"><button type="submit" aria-label="发送">↑</button></form></div>
@@ -278,6 +308,7 @@ app.addEventListener('input', event => {
 app.addEventListener('change', event => {
   if (event.target.id === 'raise-input') updateRaise(event.target.value);
   if (event.target.id === 'motion-speed') { setMotionSpeed(event.target.value); storage.set('river:motion', motionSpeed); }
+  if (event.target.id === 'music-track') selectMusicTrack(event.target.value);
 });
 app.addEventListener('click', event => {
   const button = event.target.closest('[data-action]'); if (!button) return;

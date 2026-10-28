@@ -54,3 +54,7 @@ Node.js + WebSocket 后端必须运行在服务器上，不能单独托管在 Gi
 超时可过牌时自动过牌，否则弃牌。新玩家从下一手参与。离桌视为弃牌，全押玩家保留摊牌资格。
 
 这是朋友间的娱乐牌桌，不提供账户跨设备同步、比赛盲注升级或资金交易。
+
+## 音乐来源
+
+背景音乐为 Kevin MacLeod 创作的 [Local Forecast - Slower](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1300011)、[Airport Lounge](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100806)、[Study And Relax](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1900030)，均按 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 使用。音频已转码。
