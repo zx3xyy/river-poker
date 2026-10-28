@@ -17,6 +17,80 @@ function setMotionSpeed(value) {
 }
 setMotionSpeed(motionSpeed);
 
+// A quiet, locally synthesized loop keeps the table independent of external music services.
+let musicEnabled = storage.get('river:music') !== 'off';
+const savedVolume = storage.get('river:music-volume');
+let musicVolume = savedVolume !== null && Number.isFinite(Number(savedVolume)) ? Math.max(0, Math.min(100, Number(savedVolume))) : 20;
+let audioContext = null, musicGain = null, musicTimer = null, musicPlaying = false, musicNext = 0, musicStep = 0;
+const melody = [72, 76, 79, 76, 74, 71, 67, 71, 69, 72, 76, 72, 71, 69, 64, 67, 65, 69, 72, 69, 67, 65, 62, 65, 67, 71, 74, 71, 69, 67, 62, 67];
+const chords = [[48, 55, 60, 64], [45, 52, 57, 60], [41, 48, 53, 57], [43, 50, 55, 59]];
+function musicButton() {
+  return `<button class="music-toggle ghost" data-action="music" aria-pressed="${musicEnabled}" title="${musicEnabled && !musicPlaying ? '点击播放背景音乐' : '切换背景音乐'}">♫ ${musicEnabled ? (musicPlaying ? '音乐开' : '播放音乐') : '音乐关'}</button>`;
+}
+function syncMusicControls() {
+  document.querySelectorAll('[data-action="music"]').forEach(button => {
+    button.setAttribute('aria-pressed', String(musicEnabled));
+    button.textContent = `♫ ${musicEnabled ? (musicPlaying ? '音乐开' : '播放音乐') : '音乐关'}`;
+    button.title = musicEnabled && !musicPlaying ? '点击播放背景音乐' : '切换背景音乐';
+  });
+}
+function playTone(note, at, length, volume) {
+  const oscillator = audioContext.createOscillator(), envelope = audioContext.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(440 * 2 ** ((note - 69) / 12), at);
+  envelope.gain.setValueAtTime(0.0001, at);
+  envelope.gain.exponentialRampToValueAtTime(volume, at + 0.06);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, at + length);
+  oscillator.connect(envelope).connect(musicGain);
+  oscillator.start(at); oscillator.stop(at + length + 0.02);
+}
+function scheduleMusic() {
+  if (!audioContext || audioContext.state !== 'running' || !musicEnabled) return;
+  if (musicNext < audioContext.currentTime) musicNext = audioContext.currentTime + 0.03;
+  while (musicNext < audioContext.currentTime + 0.25) {
+    if (musicStep % 8 === 0) chords[Math.floor(musicStep / 8) % chords.length].forEach((note, i) => playTone(note, musicNext + i * 0.035, 2.8, 0.1));
+    playTone(melody[musicStep % melody.length], musicNext, 1.1, 0.12);
+    musicStep++; musicNext += 0.38;
+  }
+}
+function startMusic() {
+  if (!musicEnabled || musicTimer) return;
+  try {
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) { musicEnabled = false; syncMusicControls(); return toast('此浏览器暂不支持背景音乐。'); }
+    if (!audioContext) {
+      audioContext = new Audio();
+      musicGain = audioContext.createGain();
+      musicGain.gain.value = musicVolume / 100;
+      musicGain.connect(audioContext.destination);
+    }
+    musicGain.gain.setTargetAtTime(musicVolume / 100, audioContext.currentTime, 0.04);
+    audioContext.resume().then(() => {
+      if (!musicEnabled || !musicTimer || audioContext.state !== 'running') return;
+      musicPlaying = true; syncMusicControls(); scheduleMusic();
+    }).catch(() => { clearInterval(musicTimer); musicTimer = null; musicPlaying = false; syncMusicControls(); });
+    musicNext = audioContext.currentTime + 0.05;
+    musicTimer = setInterval(scheduleMusic, 100);
+  } catch { clearInterval(musicTimer); musicTimer = null; musicPlaying = false; syncMusicControls(); }
+}
+function stopMusic() {
+  clearInterval(musicTimer); musicTimer = null; musicPlaying = false;
+  if (audioContext && musicGain) {
+    musicGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.04);
+    setTimeout(() => { if (!musicEnabled && audioContext?.state === 'running') audioContext.suspend(); }, 200);
+  }
+}
+function setMusicVolume(value) {
+  musicVolume = Math.max(0, Math.min(100, Number(value) || 0));
+  storage.set('river:music-volume', String(musicVolume));
+  if (audioContext && musicGain && musicEnabled) musicGain.gain.setTargetAtTime(musicVolume / 100, audioContext.currentTime, 0.04);
+}
+function unlockMusic(event) {
+  if (!event.target.closest?.('[data-action="music"], #music-volume') && musicEnabled && !musicPlaying) startMusic();
+}
+document.addEventListener('pointerdown', unlockMusic, { capture: true });
+document.addEventListener('keydown', unlockMusic, { capture: true });
+
 function card(value, extra = '') {
   if (value === undefined) return `<div class="card empty ${extra}" aria-label="尚未发牌">♠</div>`;
   if (value === null) return `<div class="card back ${extra}" aria-label="隐藏的底牌"></div>`;
@@ -30,7 +104,7 @@ function toast(text) {
 }
 function renderLanding() {
   state = null;
-  app.innerHTML = `<header class="site-header">${brand()}<div class="header-right"><span class="muted"><span class="status-dot"></span>朋友，随时入座</span><button class="ghost" data-action="rules">玩法 ↗</button></div></header>
+  app.innerHTML = `<header class="site-header">${brand()}<div class="header-right"><span class="muted"><span class="status-dot"></span>朋友，随时入座</span>${musicButton()}<button class="ghost" data-action="rules">玩法 ↗</button></div></header>
   <main class="hero"><section class="intro"><span class="eyebrow">GOOD FRIENDS. GREAT HANDS.</span><h1>今晚，<br>来<em>一手。</em></h1><p>把朋友聚在一张牌桌。<br>无需下载，分享链接，就能一起玩德州扑克。</p>
   <div class="join-card"><div class="tabs"><button class="tab ${tab === 'create' ? 'active' : ''}" data-action="tab" data-tab="create">创建牌桌</button><button class="tab ${tab === 'join' ? 'active' : ''}" data-action="tab" data-tab="join">加入朋友的牌桌</button></div>
   <form id="entry-form">${formError ? `<div class="error-box" role="alert">${esc(formError)}</div>` : ''}${roomMeta && tab === 'join' ? `<p class="lobby-notice">${esc(roomMeta.title)} · ${roomMeta.count}/8 人已入座${roomMeta.locked ? ' · 需要口令' : ''}</p>` : ''}<div class="field"><label for="player-name">你的牌桌昵称</label><input id="player-name" name="name" placeholder="朋友怎么称呼你？" maxlength="16" value="${esc(nickname)}" autocomplete="nickname" required></div>
@@ -76,7 +150,7 @@ function renderRoom(effects = { deal: false, boardFrom: 5, bets: new Set(), pot:
   const turnBanner = active(s) && actor ? `<div class="turn-banner ${actor.id === s.selfId ? 'your-turn' : 'their-turn'}" role="status"><span class="turn-indicator-dot"></span><strong>${actor.id === s.selfId ? '轮到你行动' : `轮到 ${esc(actor.name)} 行动`}</strong><span class="turn-banner-time" id="table-turn-clock"></span></div>` : '';
   app.innerHTML = `<header class="site-header table-header">${brand()}<div><span class="room-label">朋友的私人牌桌</span><button class="code-button" data-action="copy-code" title="复制房间码">${s.code} ⧉</button></div><div class="header-right"><button class="secondary" data-action="share">邀请好友 ↗</button><button class="ghost" data-action="rules">玩法</button></div></header>${connection !== 'online' ? `<div class="connection-banner" role="status">${connection === 'replaced' ? '这个座位已在另一个窗口打开。刷新可回到这里。' : '连接恢复中… 你的座位与筹码会保留。'}</div>` : ''}
   <main class="table-layout"><section class="table-main"><div class="table-topline"><h1>${esc(s.title)}</h1><span><span class="status-dot"></span>${s.handNo ? '第 ' + s.handNo + ' 手' : '准备入座'} · 无限注德州扑克</span></div>${turnBanner}<div class="table-shell"><div class="felt"></div><div class="felt-mark">THE RIVER CLUB</div>${s.phase === 'lobby' ? `<div class="center-message"><span class="eyebrow">TAKE A SEAT</span><h2>人齐了，就开局。</h2><p>把链接发给朋友<br>两个人也能打得尽兴</p><button class="primary" data-action="share">复制邀请链接 ↗</button></div>` : `<div class="community">${Array.from({ length: 5 }, (_, i) => card(s.board[i], i >= effects.boardFrom && s.board[i] !== undefined ? `board-card board-${i - effects.boardFrom}` : '')).join('')}</div><div class="pot-area"><div class="pot-label">${s.phase === 'showdown' ? '本手底池' : 'TOTAL POT'}</div><div class="pot-amount ${effects.pot ? 'pot-pop' : ''}">◉ ${num(s.pot)}</div><div class="street-label">${phases[s.phase]}${s.result?.showdown ? ' · 已摊牌' : ''}</div></div>`}${rotated.map((p, i) => renderSeat(p, positions[i], s, effects)).join('')}</div><div class="action-panel ${s.legal ? 'your-turn' : ''}">${actionPanel(s, me)}</div><p class="keyboard-note">认真打牌，轻松相聚。仅使用娱乐筹码。</p></section>
-  <aside class="room-side"><section class="side-section"><div class="side-heading">桌上的朋友 <span>${s.players.length} / 8</span></div>${s.players.map(p => { const net = p.stack + (active(s) ? (s.pot ? 0 : 0) : 0) - p.buyIns; return `<div class="player-row"><span class="avatar">${esc([...p.name][0])}</span><div class="player-info"><div>${esc(p.name)}${p.id === s.hostId ? '<span class="host-tag">房主</span>' : ''}${p.id === s.selfId ? '<span class="host-tag">你</span>' : ''}</div><small>${p.leaving ? '已离桌' : !p.connected ? '离线 · 保留座位' : p.sittingOut ? '下一手休息' : p.inHand && active(s) ? (p.folded ? '已弃牌' : '牌局中') : '准备好了'}</small></div><span class="net ${net >= 0 ? 'positive' : 'negative'}">${active(s) ? num(p.stack) : (net > 0 ? '+' : '') + num(net)}</span>${!p.connected && s.hostId === s.selfId && !active(s) ? `<button class="remove-btn" data-action="remove" data-player="${p.id}" title="释放离线座位">×</button>` : ''}</div>`; }).join('')}<div class="seat-controls"><button class="secondary" data-action="sitout">${me.sittingOut ? '重新准备' : '下手休息'}</button>${me.stack === 0 && !(active(s) && me.inHand) ? '<button class="secondary" data-action="rebuy">补充筹码</button>' : ''}<button class="ghost" data-action="leave">离桌</button></div></section><section class="side-section"><div class="side-heading">牌桌设置 <button class="ghost" data-action="rules" style="font-size:11px;padding:0">查看玩法 ↗</button></div><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div><div class="motion-setting"><label for="motion-speed">动画速度</label><select id="motion-speed" aria-label="动画速度"><option value="fast" ${motionSpeed === 'fast' ? 'selected' : ''}>快速</option><option value="normal" ${motionSpeed === 'normal' ? 'selected' : ''}>普通</option><option value="off" ${motionSpeed === 'off' ? 'selected' : ''}>关闭</option></select></div></section><section class="side-section activity"><div class="side-heading">牌桌动态 <span>聊两句，好牌就来</span></div><div class="activity-log" role="log" aria-label="牌局记录">${s.log.map(l => `<div class="log-line ${l.kind}">${esc(l.text)}</div>`).join('')}</div><form class="chat-form" id="chat-form"><input id="chat-text" aria-label="发送聊天消息" placeholder="和朋友说点什么…" maxlength="160" autocomplete="off" value="${esc(chatDraft)}"><button type="submit" aria-label="发送">↑</button></form></section></aside></main>`;
+  <aside class="room-side"><section class="side-section"><div class="side-heading">桌上的朋友 <span>${s.players.length} / 8</span></div>${s.players.map(p => { const net = p.stack + (active(s) ? (s.pot ? 0 : 0) : 0) - p.buyIns; return `<div class="player-row"><span class="avatar">${esc([...p.name][0])}</span><div class="player-info"><div>${esc(p.name)}${p.id === s.hostId ? '<span class="host-tag">房主</span>' : ''}${p.id === s.selfId ? '<span class="host-tag">你</span>' : ''}</div><small>${p.leaving ? '已离桌' : !p.connected ? '离线 · 保留座位' : p.sittingOut ? '下一手休息' : p.inHand && active(s) ? (p.folded ? '已弃牌' : '牌局中') : '准备好了'}</small></div><span class="net ${net >= 0 ? 'positive' : 'negative'}">${active(s) ? num(p.stack) : (net > 0 ? '+' : '') + num(net)}</span>${!p.connected && s.hostId === s.selfId && !active(s) ? `<button class="remove-btn" data-action="remove" data-player="${p.id}" title="释放离线座位">×</button>` : ''}</div>`; }).join('')}<div class="seat-controls"><button class="secondary" data-action="sitout">${me.sittingOut ? '重新准备' : '下手休息'}</button>${me.stack === 0 && !(active(s) && me.inHand) ? '<button class="secondary" data-action="rebuy">补充筹码</button>' : ''}<button class="ghost" data-action="leave">离桌</button></div></section><section class="side-section"><div class="side-heading">牌桌设置 <button class="ghost" data-action="rules" style="font-size:11px;padding:0">查看玩法 ↗</button></div><div class="table-rules"><div>大小盲<strong>${num(s.settings.smallBlind)} / ${num(s.settings.bigBlind)}</strong></div><div>思考时间<strong>${s.settings.turnSeconds} 秒</strong></div><div>初始筹码<strong>${num(s.settings.buyIn)}</strong></div></div><div class="motion-setting"><label for="motion-speed">动画速度</label><select id="motion-speed" aria-label="动画速度"><option value="fast" ${motionSpeed === 'fast' ? 'selected' : ''}>快速</option><option value="normal" ${motionSpeed === 'normal' ? 'selected' : ''}>普通</option><option value="off" ${motionSpeed === 'off' ? 'selected' : ''}>关闭</option></select></div><div class="music-setting"><div class="music-setting-title"><span>背景音乐</span>${musicButton()}</div><label for="music-volume" class="music-volume-label">音量 <span>${musicVolume}%</span></label><input type="range" id="music-volume" min="0" max="100" step="1" value="${musicVolume}" aria-label="音乐音量"></div></section><section class="side-section activity"><div class="side-heading">牌桌动态 <span>聊两句，好牌就来</span></div><div class="activity-log" role="log" aria-label="牌局记录">${s.log.map(l => `<div class="log-line ${l.kind}">${esc(l.text)}</div>`).join('')}</div><form class="chat-form" id="chat-form"><input id="chat-text" aria-label="发送聊天消息" placeholder="和朋友说点什么…" maxlength="160" autocomplete="off" value="${esc(chatDraft)}"><button type="submit" aria-label="发送">↑</button></form></section></aside></main>`;
   const activity = document.querySelector('.activity-log'); activity.scrollTop = activity.scrollHeight;
   if (focused === 'chat-text') { const el = document.querySelector('#chat-text'); el.focus({ preventScroll: true }); el.setSelectionRange(selection, selection); }
   updateClock();
@@ -172,6 +246,7 @@ app.addEventListener('input', event => {
   if (event.target.id === 'chat-text') chatDraft = event.target.value;
   if (event.target.id === 'room-code') { event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); currentCode = event.target.value; }
   if (event.target.id === 'raise-slider') updateRaise(event.target.value);
+  if (event.target.id === 'music-volume') { setMusicVolume(event.target.value); const label = document.querySelector('.music-volume-label span'); if (label) label.textContent = musicVolume + '%'; }
 });
 app.addEventListener('change', event => {
   if (event.target.id === 'raise-input') updateRaise(event.target.value);
@@ -182,6 +257,11 @@ app.addEventListener('click', event => {
   const action = button.dataset.action;
   if (action === 'home') { event.preventDefault(); if (!state) goHome(); else toast('要离开牌桌，请点击右侧「离桌」。'); }
   else if (action === 'rules') document.querySelector('#rules').showModal();
+  else if (action === 'music') {
+    if (musicEnabled && !musicPlaying) startMusic();
+    else { musicEnabled = !musicEnabled; storage.set('river:music', musicEnabled ? 'on' : 'off'); if (musicEnabled) startMusic(); else stopMusic(); }
+    syncMusicControls();
+  }
   else if (action === 'tab') { tab = button.dataset.tab; formError = ''; renderLanding(); }
   else if (action === 'share') copy(`${location.origin}/?room=${currentCode}`);
   else if (action === 'copy-code') copy(currentCode);
