@@ -1,0 +1,30 @@
+[Unit]
+Description=River Club private poker tables
+After=network.target
+
+[Service]
+Type=simple
+User=river-poker
+Group=river-poker
+WorkingDirectory=/opt/river-poker
+ExecStart=/opt/river-node/bin/node --max-old-space-size=128 /opt/river-poker/server.js
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=4317
+Environment=DATA_DIR=/var/lib/river-poker
+Environment=PUBLIC_ORIGIN=https://jump.infermex.com
+Environment=TRUST_PROXY=1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/river-poker
+MemoryMax=192M
+TasksMax=64
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
